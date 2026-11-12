@@ -1,0 +1,8 @@
+.godot/
+build/
+*.tmp
+
+# Keep signing material out of Git.
+*.keystore
+*.jks
+export_credentials.cfg
