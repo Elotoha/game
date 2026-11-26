@@ -57,3 +57,7 @@ adb install -r build/android/apex.apk
 L’export nécessite le SDK et les templates. La version 0.1.0 livrée a été exportée avec Godot 4.6.3 et Java 21 ; les outils Android 36 sont utilisés pour vérifier le manifeste ciblant Android API 36. Avant diffusion : vérifier les commandes multitouch sur un appareil, le redimensionnement, les encoches, la reprise après arrière-plan et la fluidité. Les collisions entre véhicules, l’IA, les barrières et la sauvegarde des records restent à ajouter.
 
 Voir [l’architecture et la physique](docs/architecture.md) pour modifier ou étendre le projet.
+
+## Astral Relay
+
+Course spatiale 3D indépendante pour Android. Pilotez dans des tunnels, traversez l’espace et choisissez votre route à chaque embranchement. [Instructions et commandes](astral-relay/README.md) · [Télécharger l’APK Android 1.0.0](https://github.com/Elotoha/game/raw/refs/heads/main/downloads/astral-relay-v1.0.0-android.apk)
