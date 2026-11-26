@@ -60,4 +60,4 @@ Voir [l’architecture et la physique](docs/architecture.md) pour modifier ou é
 
 ## Astral Relay
 
-Course spatiale 3D indépendante pour Android. Pilotez dans des tunnels, traversez l’espace et choisissez votre route à chaque embranchement. [Instructions et commandes](astral-relay/README.md) · [Télécharger l’APK Android 1.0.0](https://github.com/Elotoha/game/raw/refs/heads/main/downloads/astral-relay-v1.0.0-android.apk)
+Course spatiale 3D indépendante pour Android. Pilotez dans des tunnels, traversez l’espace et choisissez votre route à chaque embranchement. [Instructions et commandes](astral-relay/README.md) · [Télécharger l’APK léger ARM64](https://raw.githubusercontent.com/Elotoha/game/main/downloads/astral-relay-v1.0.0-android-arm64.apk)

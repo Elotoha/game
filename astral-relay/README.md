@@ -4,7 +4,8 @@ Une course spatiale 3D sans fin, en paysage et jouable hors ligne. Foncez à tra
 
 ## Télécharger sur Android
 
-[**Télécharger l’APK Android 1.0.0**](https://github.com/Elotoha/game/raw/refs/heads/main/downloads/astral-relay-v1.0.0-android.apk)
+- Pour la plupart des téléphones Android. [**Télécharger l’APK léger 1.0.0 (ARM64)**](https://raw.githubusercontent.com/Elotoha/game/main/downloads/astral-relay-v1.0.0-android-arm64.apk)
+- Pour les appareils Android et émulateurs x86-64. [Télécharger l’APK 1.0.0 (ARM64 et x86-64)](https://raw.githubusercontent.com/Elotoha/game/main/downloads/astral-relay-v1.0.0-android.apk)
 
 Ouvrez le fichier téléchargé sur un appareil Android 7.0 ou plus récent (ARM64 ou x86-64). Si Android le demande, autorisez l’installation depuis l’application qui ouvre le fichier. Cette version de test est signée avec une clé de débogage conservée hors du dépôt. [Empreinte SHA-256](../downloads/SHA256SUMS)
 
