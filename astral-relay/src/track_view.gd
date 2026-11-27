@@ -319,6 +319,14 @@ func _add_segment(panels: MeshDraft, trim: MeshDraft, a: FLIGHT_PATH.Sample, b: 
 		if posmod(cell, 3) == 0:
 			_add_beacons(trim, center_a, radius_a, start_z, accent)
 		_add_guide_rails(trim, center_a, center_b, radius_a, radius_b, start_z, end_z, accent)
+	if posmod(cell, 3) == 0:
+		var marker_color := accent.darkened(0.48)
+		var edge := Vector3(0.12, 0.0, 0.0)
+		for lane: float in [-FLIGHT_PATH.LANE_X, FLIGHT_PATH.LANE_X]:
+			var start_marker := Vector3(center_a.x + lane, center_a.y - radius_a.y * 0.72, start_z)
+			var end_marker := Vector3(center_b.x + lane, center_b.y - radius_b.y * 0.72, end_z)
+			end_marker = start_marker.lerp(end_marker, 0.67)
+			trim.add_quad(start_marker - edge, start_marker + edge, end_marker + edge, end_marker - edge, marker_color)
 
 
 func _point(center: Vector2, radius: Vector2, side: Vector2, z: float) -> Vector3:

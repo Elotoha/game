@@ -8,7 +8,9 @@ const RaceHud = preload("res://src/race_hud.gd")
 const Flotsam = preload("res://src/race_objects.gd")
 
 const SAVE_PATH := "user://pilot.cfg"
+const BEST_KEY := "best_1_1"
 const COURSE_SEED := 8317204
+const ENABLE_BRANCHES := false
 const START_SPEED := 73.0
 const TOP_SPEED := 137.0
 const BOOST_TIME := 3.2
@@ -24,7 +26,7 @@ class Pulse:
 	var branch := 0
 	var active := false
 
-var path := FlightPath.new(COURSE_SEED)
+var path := FlightPath.new(COURSE_SEED, ENABLE_BRANCHES)
 var track := TrackView.new()
 var ship := ShipView.new()
 var audio := RaceAudio.new()
@@ -36,28 +38,25 @@ var camera_path := FlightPath.Sample.new()
 var aim_path := FlightPath.Sample.new()
 var scratch_path := FlightPath.Sample.new()
 var entity := FlightPath.Entity.new()
+var next_obstacle := FlightPath.Entity.new()
 var pulses: Array[Pulse] = []
 var consumed := {}
 var touches := {}
-var held_keys := {}
 var mouse_held := false
-var mouse_position := Vector2.ZERO
-var firing := false
-var tap_fire := false
 var steer := Vector2.ZERO
 var state := State.MENU
 var distance := 0.0
 var speed := START_SPEED
 var offset := Vector2.ZERO
-var velocity := Vector2.ZERO
+var selected_side := -1
 var branch := 0
-var preferred_side := 1
 var shield := MAX_SHIELD
 var stored_cells := 0
 var boost := 0.0
 var invulnerable := 0.0
 var hit_kick := 0.0
 var shot_cooldown := 0.0
+var last_shot_target := -1
 var combo := 1
 var chain := 0
 var chain_time := 0.0
@@ -71,6 +70,7 @@ var viewport_camera_ready := false
 var route_message := ""
 var route_time := 0.0
 var muted := false
+var external_music := false
 var app_suspended := false
 
 
@@ -88,6 +88,8 @@ func _ready() -> void:
 	camera.fov = 58.0
 	camera.near = 0.16
 	camera.far = 490.0
+	audio.set_muted(muted)
+	audio.set_external_music(external_music)
 	add_child(audio)
 	add_child(hud)
 	for i in 18:
@@ -96,9 +98,10 @@ func _ready() -> void:
 	hud.pause_requested.connect(_pause)
 	hud.resume_requested.connect(_resume)
 	hud.mute_requested.connect(_toggle_mute)
+	hud.music_requested.connect(_toggle_music)
 	hud.menu_requested.connect(_go_to_menu)
-	audio.set_muted(muted)
 	hud.set_muted(muted)
+	hud.set_external_music(external_music)
 	if OS.has_feature("android"):
 		get_viewport().size_changed.connect(_fit_mobile_rendering)
 		_fit_mobile_rendering()
@@ -114,14 +117,17 @@ func _fit_mobile_rendering() -> void:
 func _load_pilot() -> void:
 	var file := ConfigFile.new()
 	if file.load(SAVE_PATH) == OK:
-		best = maxi(0, int(file.get_value("pilot", "best", 0)))
+		best = maxi(0, int(file.get_value("pilot", BEST_KEY, 0)))
 		muted = bool(file.get_value("pilot", "muted", false))
+		external_music = bool(file.get_value("pilot", "external_music", false))
 
 
 func _save_pilot() -> void:
 	var file := ConfigFile.new()
-	file.set_value("pilot", "best", best)
+	file.load(SAVE_PATH)
+	file.set_value("pilot", BEST_KEY, best)
 	file.set_value("pilot", "muted", muted)
+	file.set_value("pilot", "external_music", external_music)
 	file.save(SAVE_PATH)
 
 
@@ -132,19 +138,26 @@ func _toggle_mute() -> void:
 	_save_pilot()
 
 
+func _toggle_music() -> void:
+	external_music = not external_music
+	audio.set_external_music(external_music)
+	hud.set_external_music(external_music)
+	_save_pilot()
+
+
 func _reset(where: float) -> void:
 	distance = where
 	speed = START_SPEED
-	offset = Vector2.ZERO
-	velocity = Vector2.ZERO
+	selected_side = -1
+	offset = Vector2(-FlightPath.LANE_X, 0.0)
 	branch = 0
-	preferred_side = 1
 	shield = MAX_SHIELD
 	stored_cells = 0
 	boost = 0.0
 	invulnerable = 0.0
 	hit_kick = 0.0
 	shot_cooldown = 0.0
+	last_shot_target = -1
 	combo = 1
 	chain = 0
 	chain_time = 0.0
@@ -172,7 +185,7 @@ func _go_to_menu() -> void:
 func _launch() -> void:
 	_reset(0.0)
 	state = State.FLIGHT
-	audio.set_racing(true)
+	audio.start_run()
 	hud.show_run()
 	_update_hud()
 
@@ -234,10 +247,7 @@ func _notification(what: int) -> void:
 
 func _clear_controls() -> void:
 	touches.clear()
-	held_keys.clear()
 	mouse_held = false
-	firing = false
-	tap_fire = false
 	steer = Vector2.ZERO
 
 
@@ -247,8 +257,6 @@ func _input(event: InputEvent) -> void:
 		touches.erase(event.index)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
 		mouse_held = false
-	elif event is InputEventKey and not event.pressed:
-		held_keys.erase(event.keycode)
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_ESCAPE:
 		if state == State.FLIGHT:
 			_pause()
@@ -268,59 +276,33 @@ func _unhandled_input(event: InputEvent) -> void:
 				_resume()
 			return
 		if state == State.FLIGHT:
-			held_keys[event.keycode] = true
-			if event.keycode == KEY_SPACE:
-				tap_fire = true
+			match event.keycode:
+				KEY_LEFT, KEY_A, KEY_Q:
+					selected_side = -1
+				KEY_RIGHT, KEY_D:
+					selected_side = 1
 	if state != State.FLIGHT:
 		return
 	if event is InputEventScreenTouch and event.pressed:
-		var p := _touch_position(event.position)
-		touches[event.index] = p
-		tap_fire = tap_fire or _zone(p) == Vector2.ZERO
+		touches[event.index] = true
+		_select_side(event.position.x)
 	elif event is InputEventScreenDrag and touches.has(event.index):
-		touches[event.index] = _touch_position(event.position)
+		_select_side(event.position.x)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.device != InputEvent.DEVICE_ID_EMULATION:
 		if event.pressed:
 			mouse_held = true
-			mouse_position = _touch_position(event.position)
-			tap_fire = tap_fire or _zone(mouse_position) == Vector2.ZERO
+			_select_side(event.position.x)
 	elif event is InputEventMouseMotion and mouse_held:
-		mouse_position = _touch_position(event.position)
+		_select_side(event.position.x)
 
 
-func _touch_position(p: Vector2) -> Vector2:
-	return p / get_viewport().get_visible_rect().size
-
-
-func _zone(p: Vector2) -> Vector2:
-	return Vector2(
-		float(p.x > 0.65) - float(p.x < 0.35),
-		float(p.y < 0.30) - float(p.y > 0.70)
-	)
-
-
-func _read_controls() -> void:
-	var right := held_keys.has(KEY_RIGHT) or held_keys.has(KEY_D)
-	var left := held_keys.has(KEY_LEFT) or held_keys.has(KEY_A) or held_keys.has(KEY_Q)
-	var up := held_keys.has(KEY_UP) or held_keys.has(KEY_W) or held_keys.has(KEY_Z)
-	var down := held_keys.has(KEY_DOWN) or held_keys.has(KEY_S)
-	steer = Vector2(float(right) - float(left), float(up) - float(down))
-	firing = held_keys.has(KEY_SPACE)
-	for p: Vector2 in touches.values():
-		var input := _zone(p)
-		steer += input
-		firing = firing or input == Vector2.ZERO
-	if mouse_held:
-		var input := _zone(mouse_position)
-		steer += input
-		firing = firing or input == Vector2.ZERO
-	steer = Vector2(clampf(steer.x, -1, 1), clampf(steer.y, -1, 1)).limit_length()
+func _select_side(screen_x: float) -> void:
+	selected_side = -1 if screen_x < get_viewport().get_visible_rect().get_center().x else 1
 
 
 func _process(delta: float) -> void:
 	ambient_clock += delta
 	if state == State.FLIGHT:
-		_read_controls()
 		accumulator += minf(delta, 0.06)
 		while accumulator >= STEP and state == State.FLIGHT:
 			_step(STEP)
@@ -356,30 +338,45 @@ func _step(dt: float) -> void:
 	var previous := distance
 	distance += speed * dt
 
-	var target_velocity := steer * Vector2(22.0, 17.0)
-	velocity = velocity.move_toward(target_velocity, (132.0 if steer != Vector2.ZERO else 175.0) * dt)
-	offset += velocity * dt
-	if absf(steer.x) > 0.2:
-		preferred_side = 1 if steer.x > 0.0 else -1
+	var target_x := selected_side * FlightPath.LANE_X
+	steer.x = clampf((target_x - offset.x) / FlightPath.LANE_X, -1.0, 1.0)
+	offset.x = lerpf(offset.x, target_x, 1.0 - exp(-17.0 * dt))
 
 	if path.is_split(distance):
 		if branch == 0:
-			branch = path.split_choice(distance, offset.x, preferred_side)
+			branch = path.split_choice(distance, offset.x, selected_side)
 			route_message = "←  FAILLE" if branch < 0 else "ORBITALE  →"
 			route_time = 1.6
 	else:
 		branch = 0
 	path.sample(distance, branch, ship_path)
-	var limits := Vector2(ship_path.radius_x * 0.78, ship_path.radius_y * 0.75)
-	var normalized_offset := offset / limits
-	if normalized_offset.length_squared() > 1.0:
-		offset = normalized_offset.normalized() * limits
-
-	if (firing or tap_fire) and shot_cooldown <= 0.0:
-		_fire()
-		tap_fire = false
+	if shot_cooldown <= 0.0:
+		_auto_fire()
 	_step_pulses(dt)
 	_step_entities(previous)
+
+
+func _obstacle_ahead(reach: float) -> bool:
+	var spacing := FlightPath.ROW_DISTANCE * FlightPath.OBSTACLE_ROWS
+	var first := floori(distance / spacing) + 1
+	var last := floori((distance + reach) / spacing)
+	for wave in range(first, last + 1):
+		var row := wave * FlightPath.OBSTACLE_ROWS
+		path.obstacle(row, branch if branch != 0 else selected_side, next_obstacle)
+		if next_obstacle.type != FlightPath.NONE and not consumed.has(_entity_key(row, next_obstacle.branch, false)):
+			return true
+	return false
+
+
+func _auto_fire() -> void:
+	if not _obstacle_ahead(120.0) or next_obstacle.type != FlightPath.DESTRUCTIBLE:
+		return
+	if next_obstacle.distance - distance < 2.0 or absf(next_obstacle.x - offset.x) >= next_obstacle.half_width - 0.25:
+		return
+	var target := _entity_key(roundi(next_obstacle.distance / FlightPath.ROW_DISTANCE), next_obstacle.branch, false)
+	if target != last_shot_target:
+		last_shot_target = target
+		_fire()
 
 
 func _fire() -> void:
@@ -389,7 +386,7 @@ func _fire() -> void:
 			pulse.distance = distance + 1.5
 			pulse.offset = offset + Vector2(0.0, 0.10)
 			pulse.branch = branch
-			shot_cooldown = 0.145
+			shot_cooldown = 0.20
 			audio.cue(RaceAudio.FIRE)
 			return
 
@@ -401,7 +398,7 @@ func _pulse_side(pulse: Pulse) -> int:
 		return pulse.branch
 	if branch != 0 and path.section(distance) == path.section(pulse.distance):
 		return branch
-	return path.split_choice(pulse.distance, pulse.offset.x, preferred_side)
+	return path.split_choice(pulse.distance, pulse.offset.x, selected_side)
 
 
 func _step_pulses(dt: float) -> void:
@@ -523,14 +520,17 @@ func _entity_position(item: FlightPath.Entity) -> Vector3:
 
 func _update_hud() -> void:
 	var hint := ""
-	if boost > 0.0:
+	if _obstacle_ahead(speed * 1.85) and next_obstacle.type == FlightPath.SOLID \
+			and signf(next_obstacle.x) == selected_side:
+		hint = "PASSAGE LIBRE  →" if selected_side < 0 else "←  PASSAGE LIBRE"
+	elif boost > 0.0:
 		hint = "SURVITESSE"
 	elif route_time > 0.0:
 		hint = route_message
 	elif branch == 0 and path.is_split(distance + 115.0):
 		hint = "←  FAILLE  /  ORBITALE  →"
 	var charge := boost / BOOST_TIME if boost > 0.0 else stored_cells / 3.0
-	hud.update_run(speed * 3.6, _score(), shield / float(MAX_SHIELD), charge, distance, hint, combo)
+	hud.update_run(speed * 3.6, _score(), shield / float(MAX_SHIELD), charge, distance, hint, combo, boost > 0.0, selected_side)
 
 
 func _draw_world(dt: float) -> void:
@@ -589,7 +589,7 @@ func _update_camera(where: float, relative_ship: Vector2, dt: float) -> void:
 func _draw_entities(where: float) -> void:
 	objects.begin_entities()
 	var first_row := maxi(0, floori((where - 12.0) / FlightPath.ROW_DISTANCE))
-	var last_row := floori((where + 210.0) / FlightPath.ROW_DISTANCE) + 1
+	var last_row := floori((where + 280.0) / FlightPath.ROW_DISTANCE) + 1
 	for row in range(first_row, last_row + 1):
 		_draw_row(row, -1)
 		if path.has_separate_entities(row * FlightPath.ROW_DISTANCE):

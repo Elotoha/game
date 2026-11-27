@@ -2,7 +2,11 @@ extends Node
 
 enum { FIRE, HIT, PICKUP, BOOST, CRASH }
 
-const SCORE := preload("res://assets/audio/redshift_relay.ogg")
+const SOUNDTRACK := [
+	preload("res://assets/audio/redshift_relay.ogg"),
+	preload("res://assets/audio/ion_rush.ogg"),
+	preload("res://assets/audio/pulsar_drift.ogg"),
+]
 const EFFECTS := [
 	preload("res://assets/audio/fire.wav"),
 	preload("res://assets/audio/hit.wav"),
@@ -19,9 +23,11 @@ const MUTED_VOLUME_DB := -80.0
 var _music := AudioStreamPlayer.new()
 var _effects: Array[AudioStreamPlayer] = []
 var _muted := false
+var _external_music := false
 var _racing := false
 var _paused := false
 var _playback_enabled: bool
+var _track_index := 0
 
 
 func _init(playback_enabled: bool = AudioServer.get_driver_name() != "Dummy") -> void:
@@ -29,14 +35,10 @@ func _init(playback_enabled: bool = AudioServer.get_driver_name() != "Dummy") ->
 
 
 func _ready() -> void:
-	var soundtrack := SCORE.duplicate() as AudioStreamOggVorbis
-	soundtrack.loop = true
-	_music.stream = soundtrack
 	_music.volume_db = _music_target()
 	add_child(_music)
-	if _playback_enabled:
-		_music.play()
-		_music.stream_paused = _paused
+	_music.finished.connect(_next_track)
+	_play_track()
 	for index in EFFECTS.size():
 		var player := AudioStreamPlayer.new()
 		player.stream = EFFECTS[index]
@@ -54,16 +56,47 @@ func set_racing(enabled: bool) -> void:
 	_racing = enabled
 
 
+func start_run() -> void:
+	_racing = true
+	_next_track()
+
+
+func _next_track() -> void:
+	_track_index = (_track_index + 1) % SOUNDTRACK.size()
+	_play_track()
+
+
+func _play_track() -> void:
+	if _playback_enabled and not _muted and not _external_music and _music.is_inside_tree():
+		_music.stream = SOUNDTRACK[_track_index]
+		_music.play()
+		_music.stream_paused = _paused
+
+
+func set_external_music(enabled: bool) -> void:
+	if enabled == _external_music:
+		return
+	_external_music = enabled
+	if enabled:
+		_music.stop()
+	else:
+		_play_track()
+
+
 func is_muted() -> bool:
 	return _muted
 
 
 func set_muted(enabled: bool) -> void:
+	if enabled == _muted:
+		return
 	_muted = enabled
 	if enabled:
-		_music.volume_db = MUTED_VOLUME_DB
+		_music.stop()
 		for player in _effects:
 			player.stop()
+	else:
+		_play_track()
 
 
 func set_paused(enabled: bool) -> void:

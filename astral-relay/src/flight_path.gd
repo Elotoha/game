@@ -3,6 +3,8 @@ extends RefCounted
 
 const SECTION_LENGTH := 560.0
 const ROW_DISTANCE := 24.0
+const LANE_X := 3.0
+const OBSTACLE_ROWS := 9
 const FORK_START := 270.0
 const FORK_END := 456.0
 
@@ -37,12 +39,14 @@ class Entity extends RefCounted:
 var _salt: int
 var _phase_x: float
 var _phase_y: float
+var _branches_enabled: bool
 
 
-func _init(seed_value: int = 0x41535452) -> void:
+func _init(seed_value: int = 0x41535452, branches_enabled: bool = true) -> void:
 	_salt = seed_value & 0x7FFFFFFF
 	_phase_x = float(_salt & 0xFFFF) * TAU / 65536.0
 	_phase_y = float((_salt >> 15) & 0xFFFF) * TAU / 65536.0
+	_branches_enabled = branches_enabled
 
 
 func section(distance: float) -> int:
@@ -59,12 +63,12 @@ func split_end(distance: float) -> float:
 
 func is_split(distance: float) -> bool:
 	var offset := fposmod(distance, SECTION_LENGTH)
-	return offset >= FORK_START and offset < FORK_END
+	return _branches_enabled and offset >= FORK_START and offset < FORK_END
 
 
 func has_separate_entities(distance: float) -> bool:
 	var offset := fposmod(distance, SECTION_LENGTH)
-	return offset >= FORK_START + 41.0 and offset < FORK_END - 34.0
+	return _branches_enabled and offset >= FORK_START + 41.0 and offset < FORK_END - 34.0
 
 
 func split_choice(distance: float, lateral_x: float, preferred_side: int = 1) -> int:
@@ -78,8 +82,8 @@ func sample(distance: float, branch: int, out: Sample) -> void:
 	var section_index := section(distance)
 	var offset := distance - float(section_index) * SECTION_LENGTH
 	var region := section_index & 3
-	var spread := _ramp(offset - FORK_START, 52.0) * _ramp(FORK_END - offset, 49.0)
-	var branch_side := float(signi(branch))
+	var spread := 0.0
+	var branch_side := 0.0
 	var width := 19.6 + 1.7 * sin(float(section_index) * 1.83 + _phase_y)
 	var opening: float
 	match region:
@@ -87,11 +91,14 @@ func sample(distance: float, branch: int, out: Sample) -> void:
 		1: opening = _window(offset, 78.0, 202.0, 20.0)
 		2: opening = _window(offset, 130.0, 245.0, 24.0)
 		_: opening = _window(offset, 96.0, 225.0, 26.0)
-	var entrance := _window(offset, FORK_START - 17.0, FORK_START + 43.0, 17.0)
-	var exit := _window(offset, FORK_END - 35.0, FORK_END + 17.0, 16.0)
-	opening = maxf(opening, 0.87 * maxf(entrance, exit))
-	if branch < 0 and region != 1:
-		opening = maxf(opening, _window(offset, FORK_START + 49.0, FORK_END - 24.0, 20.0))
+	if _branches_enabled:
+		spread = _ramp(offset - FORK_START, 52.0) * _ramp(FORK_END - offset, 49.0)
+		branch_side = float(signi(branch))
+		var entrance := _window(offset, FORK_START - 17.0, FORK_START + 43.0, 17.0)
+		var exit := _window(offset, FORK_END - 35.0, FORK_END + 17.0, 16.0)
+		opening = maxf(opening, 0.87 * maxf(entrance, exit))
+		if branch < 0 and region != 1:
+			opening = maxf(opening, _window(offset, FORK_START + 49.0, FORK_END - 24.0, 20.0))
 
 	out.x = (
 		6.4 * sin(distance * 0.0107 + _phase_x) + 5.6 * sin(distance * 0.0047 + _phase_y)
@@ -113,79 +120,48 @@ func sample(distance: float, branch: int, out: Sample) -> void:
 
 func obstacle(row: int, branch: int, out: Entity) -> void:
 	_reset_entity(row, branch, out)
-	if row < 5 or _blocks_entities(out.distance, out.branch):
+	if row < OBSTACLE_ROWS or row % OBSTACLE_ROWS != 0 or _blocks_entities(out.distance, out.branch):
 		return
-	match row:
-		5:
-			_place(out, DESTRUCTIBLE, 0.0, 0.0, 1.45, 1.2)
-			return
-		6, 8:
-			return
-		7:
-			_place(out, SOLID, -3.15, -0.6, 1.75, 1.75)
-			return
-
 	var key := _row_key(row, out.branch)
-	var frequency := mini(87, 60 + floori(float(row) / 12.0))
-	if out.branch > 0:
-		frequency += 10
-	if key % 100 >= frequency:
-		return
-	var type := DESTRUCTIBLE if ((key >> 10) & 7) < 5 else SOLID
-	var lane := ((key >> 5) % 5) - 2
-	var level := ((key >> 8) % 3) - 1
-	var half_width := 1.25 + float((key >> 13) & 3) * 0.18
-	var half_height := 1.03 + float((key >> 15) & 3) * 0.16
-	if type == SOLID:
-		half_width += 0.36
-		half_height += 0.38
-	_place(out, type, float(lane) * 2.03, float(level) * 1.9, half_width, half_height)
+	var solid := key % 5 != 0
+	var side := -1.0 if (key & 1) == 0 else 1.0
+	match row:
+		9:
+			solid = false
+			side = -1.0
+		18:
+			solid = true
+			side = -1.0
+		27:
+			solid = true
+			side = 1.0
+	_place(out, SOLID if solid else DESTRUCTIBLE, side * LANE_X, 0.0, 1.80, 1.75 if solid else 1.45)
 
 
 func pickup(row: int, branch: int, out: Entity) -> void:
 	_reset_entity(row, branch, out)
-	if row < 3 or _blocks_entities(out.distance, out.branch):
+	if row < 3 or row % 3 != 0 or row % OBSTACLE_ROWS == 0 or _blocks_entities(out.distance, out.branch):
 		return
+	var key := _row_key(row, out.branch)
+	var side := -1.0 if (key & 1) == 0 else 1.0
 	match row:
 		3:
-			_place(out, ENERGY, 0.0, 0.0, 0.82, 0.82)
-			return
-		4:
-			_place(out, ENERGY, 1.65, 0.45, 0.82, 0.82)
-			return
-		5, 7:
-			return
+			side = -1.0
 		6:
-			_place(out, ENERGY, -1.5, 0.0, 0.82, 0.82)
-			return
-		8:
-			_place(out, BOOST, 2.05, -0.35, 1.1, 0.86)
-			return
-
-	var key := _row_key(row, out.branch)
-	var boost_pad := (
-		out.branch > 0 and fposmod(out.distance, SECTION_LENGTH) >= FORK_START + 88.0
-		and fposmod(out.distance, SECTION_LENGTH) < FORK_START + 112.0
-	)
-	var item_roll := (key >> 16) % 100
-	if not boost_pad and item_roll > 63:
-		return
-	var lane := ((key >> 5) % 5) - 2
-	var x := -3.55 if lane > 0 else 3.55
-	if lane == 0 and ((key >> 9) & 1) == 0:
-		x = -x
-	var y := float(((key >> 20) % 3) - 1) * 1.6
-	if boost_pad or item_roll < 13:
-		_place(out, BOOST, x, y, 1.03, 0.86)
+			side = 1.0
+		12:
+			side = -1.0
+		15, 24:
+			side = 1.0
+	if row == 24 or (row > 24 and (key >> 16) % 8 == 0):
+		_place(out, BOOST, side * LANE_X, 0.0, 1.10, 0.95)
 	else:
-		_place(out, ENERGY, x, y, 0.82, 0.82)
+		_place(out, ENERGY, side * LANE_X, 0.0, 0.88, 0.88)
 
 
 func _blocks_entities(distance: float, branch: int) -> bool:
 	var offset := fposmod(distance, SECTION_LENGTH)
-	if offset >= FORK_START - 20.0 and offset < FORK_END + 11.0:
-		return branch == 0
-	return false
+	return _branches_enabled and branch == 0 and offset >= FORK_START - 20.0 and offset < FORK_END + 11.0
 
 
 func _reset_entity(row: int, branch: int, out: Entity) -> void:

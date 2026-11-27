@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render Astral Relay's original score and effects with NumPy and ffmpeg."""
 
+import argparse
 from pathlib import Path
 import subprocess
 import tempfile
@@ -215,6 +216,71 @@ def score():
     return np.tanh(0.86 * (drums + bass_track + harmony)) * 1.09
 
 
+def additional_score(tempo, breaks):
+    """Make a 24-bar electro or breakbeat track with a distinct melody."""
+    step = 60 / tempo / 4
+    bars = 24
+    drums = np.zeros((round(bars * 16 * step * SAMPLE_RATE), 2), dtype=np.float32)
+    bass_track = np.zeros_like(drums)
+    harmony = np.zeros_like(drums)
+    kick_sound = kick()
+    snare_sound = snare()
+    closed_hat, open_hat = hat(), hat(open_hat=True)
+    kick_times = []
+    if breaks:
+        chords = ((57, 60, 64, 67), (53, 57, 60, 64), (55, 59, 62, 65), (52, 56, 59, 62))
+        melody = (81, 84, 79, 76, 83, 79, 74, 76)
+        beat = ((0, 6, 11), (0, 5, 10, 14))
+    else:
+        chords = ((55, 58, 62, 65), (51, 55, 58, 62), (53, 57, 60, 63), (50, 54, 57, 60))
+        melody = (74, 79, 77, 74, 77, 81, 78, 74)
+        beat = ((0, 4, 8, 12), (0, 4, 8, 12, 15))
+
+    for bar in range(bars):
+        start = bar * 16 * step
+        chord = chords[bar % 4]
+        breakdown = 12 <= bar < 16
+        for index in ((0, 10) if breakdown else beat[bar % 2]):
+            at = start + index * step
+            mix(drums, kick_sound, at, 0.56 if index % 4 == 0 else 0.43)
+            kick_times.append(at)
+        for index in ((8,) if breakdown else (4, 12)):
+            mix(drums, snare_sound, start + index * step, 0.49)
+        if bar % 4 == 3:
+            for index, level in ((13.5, 0.12), (14.5, 0.19), (15.2, 0.26)):
+                mix(drums, snare_sound, start + index * step, level, 0.24)
+        for index in range(2, 16, 2):
+            open_voice = index % 4 == 2
+            mix(drums, open_hat if open_voice else closed_hat, start + index * step,
+                0.17 if open_voice else 0.095, 0.27 if open_voice else -0.32)
+        notes = ((0, 6.0), (10, 4.5)) if breakdown else ((0, 3.5), (4.5, 2.1), (8, 2.4), (11.5, 3.5))
+        for index, (position, length) in enumerate(notes):
+            pitch = chord[0] - 24 + (12 if index == 2 else 0)
+            mix(bass_track, bass(pitch, step * length, not breakdown), start + position * step, 0.40)
+
+        for index, note in enumerate(chord):
+            pan = 0.46 if index % 2 else -0.46
+            if breakdown:
+                mix(harmony, pad(note, step * 20, 0.998 if pan < 0 else 1.002), start, 0.075, pan)
+            else:
+                for position in ((2.3, 8, 13) if breaks else (2, 6, 10, 14)):
+                    mix(harmony, pluck(note + 12, step * 2.6, breaks), start + position * step, 0.067, pan)
+
+        if not breakdown:
+            first_note = (bar % 4) * 2
+            motif = melody[first_note:first_note + 2]
+            for index, (position, length) in enumerate(((1.0, 3.5), (8.5, 4.0), (13.1, 1.8))):
+                pitch = motif[index % 2] - (12 if index == 2 else 0)
+                voice = lead(pitch, length * step)
+                at = start + position * step
+                mix(harmony, voice, at, 0.103 if bar < 16 else 0.139, -0.12)
+                mix(harmony, voice, at + 2.5 * step, 0.038, 0.58)
+                mix(harmony, voice, at + 5 * step, 0.022, -0.55)
+
+    duck(bass_track, kick_times)
+    return np.tanh(0.87 * (drums + bass_track + harmony)) * 0.98
+
+
 def laser():
     time = seconds(0.135)
     phase = TAU * (280 * time + 24 * (1 - np.exp(-time / 0.026)))
@@ -271,19 +337,29 @@ def wav(path, signal):
         writer.writeframes((np.clip(signal, -1, 1) * 32767).astype("<i2").tobytes())
 
 
-def main():
-    DESTINATION.mkdir(parents=True, exist_ok=True)
+def encode_score(filename, title, signal):
     with tempfile.TemporaryDirectory() as folder:
         intermediate = Path(folder) / "score.wav"
-        wav(intermediate, score())
+        wav(intermediate, signal)
         subprocess.run([
             "ffmpeg", "-loglevel", "error", "-y", "-i", str(intermediate),
-            "-c:a", "libvorbis", "-q:a", "5", "-metadata", "title=Redshift Relay",
-            str(DESTINATION / "redshift_relay.ogg"),
+            "-c:a", "libvorbis", "-q:a", "5", "-metadata", f"title={title}",
+            str(DESTINATION / filename),
         ], check=True)
-    for name, effect in (("fire", laser), ("hit", impact), ("pickup", pickup),
-                         ("boost", boost), ("crash", crash)):
-        wav(DESTINATION / f"{name}.wav", effect())
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--additional-only", action="store_true", help="keep the original track and effects")
+    args = parser.parse_args()
+    DESTINATION.mkdir(parents=True, exist_ok=True)
+    if not args.additional_only:
+        encode_score("redshift_relay.ogg", "Redshift Relay", score())
+        for name, effect in (("fire", laser), ("hit", impact), ("pickup", pickup),
+                             ("boost", boost), ("crash", crash)):
+            wav(DESTINATION / f"{name}.wav", effect())
+    encode_score("ion_rush.ogg", "Ion Rush", additional_score(148, breaks=False))
+    encode_score("pulsar_drift.ogg", "Pulsar Drift", additional_score(166, breaks=True))
 
 
 if __name__ == "__main__":

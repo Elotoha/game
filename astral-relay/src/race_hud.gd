@@ -4,6 +4,7 @@ signal launch_requested
 signal pause_requested
 signal resume_requested
 signal mute_requested
+signal music_requested
 signal menu_requested
 
 enum Screen { MENU, RUN, PAUSE, RESULT }
@@ -41,7 +42,10 @@ var _shield := 1.0
 var _boost := 0.0
 var _route_hint := ""
 var _combo := 1
+var _boost_active := false
+var _selected_side := -1
 var _muted := false
+var _external_music := false
 var _new_best := false
 var _redraw_pending := false
 var _redraw_elapsed := 0.0
@@ -75,6 +79,7 @@ func _ready() -> void:
 	_add_button("retry", "RECOMMENCER", false, func(): launch_requested.emit())
 	_add_button("menu", "MENU", false, func(): menu_requested.emit())
 	_add_button("mute", "SON ACTIF", false, func(): mute_requested.emit())
+	_add_button("music", "MUSIQUE DU JEU", false, func(): music_requested.emit())
 	_buttons["pause"].tooltip_text = "Pause"
 	_surface.resized.connect(_layout)
 	_layout()
@@ -108,8 +113,15 @@ func set_muted(muted: bool) -> void:
 		_buttons["mute"].tooltip_text = "Activer le son" if _muted else "Couper le son"
 
 
+func set_external_music(external: bool) -> void:
+	_external_music = external
+	if is_instance_valid(_surface):
+		_buttons["music"].text = "MUSIQUE EXTERNE" if external else "MUSIQUE DU JEU"
+		_buttons["music"].tooltip_text = "Rétablir la bande-son" if external else "Couper la bande-son et garder les effets"
+
+
 func update_run(speed: float, score: int, shield: float, boost: float, distance_m: float,
-		route_hint: String = "", combo: int = 1) -> void:
+		route_hint: String, combo: int, boost_active: bool, selected_side: int) -> void:
 	_speed = speed
 	_score = score
 	_shield = clampf(shield, 0.0, 1.0)
@@ -117,6 +129,8 @@ func update_run(speed: float, score: int, shield: float, boost: float, distance_
 	_distance = distance_m
 	_route_hint = route_hint
 	_combo = combo
+	_boost_active = boost_active
+	_selected_side = selected_side
 	_redraw_pending = true
 
 
@@ -199,19 +213,23 @@ func _layout() -> void:
 	match _screen:
 		Screen.MENU:
 			var start_position := _menu_origin()
+			var upper_right := Vector2(_safe.end.x, _safe.position.y)
 			_place("start", _rect(start_position, Rect2(5, 298, 258, 57)), 23)
-			_place("mute", _rect(_safe.position + Vector2(_safe.size.x, 0.0), Rect2(-139, 12, 128, 43)), 14)
+			_place("music", _rect(upper_right, Rect2(-315, 12, 160, 43)), 14)
+			_place("mute", _rect(upper_right, Rect2(-139, 12, 128, 43)), 14)
 		Screen.RUN:
 			_place("pause", _rect(_safe.end, Rect2(-59, -_safe.size.y / _scale, 52, 53)), 23)
 		Screen.PAUSE:
 			_place("resume", _rect(_modal.position, Rect2(44, 148, 386, 55)), 22)
 			_place("retry", _rect(_modal.position, Rect2(44, 221, 236, 47)), 15)
 			_place("menu", _rect(_modal.position, Rect2(296, 221, 134, 47)), 15)
-			_place("mute", _rect(_modal.position, Rect2(44, 285, 386, 43)), 14)
+			_place("music", _rect(_modal.position, Rect2(44, 285, 236, 43)), 14)
+			_place("mute", _rect(_modal.position, Rect2(296, 285, 134, 43)), 14)
 		Screen.RESULT:
 			_place("restart", _rect(_modal.position, Rect2(42, 286, 238, 54)), 21)
 			_place("menu", _rect(_modal.position, Rect2(299, 286, 133, 54)), 15)
 	set_muted(_muted)
+	set_external_music(_external_music)
 	_surface.queue_redraw()
 
 
@@ -265,15 +283,16 @@ func _draw_menu() -> void:
 	_surface.draw_texture_rect(_bottom_scrim, Rect2(Vector2(0, size.y * 0.81), Vector2(size.x, size.y * 0.19)), false)
 	var origin := _menu_origin()
 	_draw_mark(origin)
-	_text(_position(origin, Vector2(54, 6)), "COURSE SPATIALE", 15, TEAL)
+	var version := str(ProjectSettings.get_setting("application/config/version"))
+	_text(_position(origin, Vector2(54, 6)), "COURSE SPATIALE  ·  " + version, 15, TEAL)
 	_text(_position(origin, Vector2(-7, 106)), "ASTRAL", 107, WHITE, true)
 	_text(_position(origin, Vector2(-7, 196)), "RELAY", 107, TEAL, true)
-	_text(_position(origin, Vector2(1, 241)), "Foncez, tirez et choisissez votre trajectoire.", 21, WHITE)
+	_text(_position(origin, Vector2(1, 241)), "Deux commandes, à pleine vitesse.", 21, WHITE)
 	var record_position := _position(origin, Vector2(3, 404))
 	_surface.draw_line(record_position, record_position + Vector2(254 * _scale, 0), LINE, _scale)
 	_text(record_position + Vector2(0, 28 * _scale), "RECORD", 14, MUTED)
 	_text(record_position + Vector2(254, 33) * _scale, _score_text(_best), 27, WHITE, true, 1.0)
-	_draw_control_guide(_safe.end + Vector2(-278, -176) * _scale)
+	_draw_control_guide(_safe.end + Vector2(-278, -132) * _scale)
 
 
 func _draw_mark(at: Vector2) -> void:
@@ -286,29 +305,16 @@ func _draw_mark(at: Vector2) -> void:
 
 
 func _draw_control_guide(origin: Vector2) -> void:
-	var body := _rect(origin, Rect2(0, 0, 268, 171))
+	var body := _rect(origin, Rect2(0, 0, 268, 122))
 	_draw_panel(body, Color(0.033, 0.06, 0.14, 0.88))
-	_text(_position(origin, Vector2(20, 29)), "COMMANDES TACTILES", 15, WHITE, true)
-	var map := _rect(origin, Rect2(20, 43, 228, 108))
+	_text(_position(origin, Vector2(20, 28)), "TOUCHEZ UN CÔTÉ", 15, WHITE, true)
+	var map := _rect(origin, Rect2(20, 40, 228, 44))
 	_surface.draw_rect(map, Color(0.12, 0.18, 0.27, 0.72))
-	for column: float in [0.35, 0.65]:
-		var x := map.position.x + map.size.x * column
-		_surface.draw_line(Vector2(x, map.position.y), Vector2(x, map.end.y), LINE, _scale)
-	for row: float in [0.30, 0.70]:
-		var y := map.position.y + map.size.y * row
-		_surface.draw_line(Vector2(map.position.x, y), Vector2(map.end.x, y), LINE, _scale)
-	var fire_size := map.size * Vector2(0.30, 0.40)
-	var fire_rect := Rect2(map.get_center() - fire_size * 0.5, fire_size)
-	_surface.draw_rect(fire_rect, Color(0.19, 0.50, 0.49, 0.33))
-	_surface.draw_rect(fire_rect, Color(TEAL, 0.65), false, _scale)
-	_text(map.get_center() + Vector2(0, 5 * _scale), "TIR", 15, TEAL, true, 0.5)
-	for row in range(3):
-		for column in range(3):
-			var direction := Vector2(column - 1, row - 1)
-			if direction.is_zero_approx():
-				continue
-			var marker := map.get_center() + direction * map.size * Vector2(0.325, 0.35)
-			_draw_arrow(marker, direction, 8.5 if row == 1 or column == 1 else 6.0, MUTED)
+	var middle := map.get_center()
+	_surface.draw_line(Vector2(middle.x, map.position.y), Vector2(middle.x, map.end.y), LINE, _scale)
+	_draw_arrow(middle - Vector2(map.size.x * 0.25, 0), Vector2.LEFT, 16.0, TEAL)
+	_draw_arrow(middle + Vector2(map.size.x * 0.25, 0), Vector2.RIGHT, 16.0, TEAL)
+	_text(_position(origin, Vector2(20, 105)), "TIR AUTOMATIQUE", 12, MUTED)
 
 
 func _draw_run() -> void:
@@ -332,7 +338,7 @@ func _draw_run() -> void:
 	_draw_meter(_position(middle, Vector2(-133, 7)), "BOUCLIER", _shield, 3,
 		TEAL if _shield > 0.35 else ORANGE)
 	_draw_meter(_position(middle, Vector2(13, 7)), "TURBO", _boost,
-		1 if _route_hint == "SURVITESSE" else 3, ORANGE)
+		1 if _boost_active else 3, ORANGE)
 	if not _route_hint.is_empty():
 		_draw_route_hint(_position(middle, Vector2(0, 91)))
 	_draw_touch_hints(size)
@@ -366,23 +372,13 @@ func _draw_route_hint(origin: Vector2) -> void:
 
 
 func _draw_touch_hints(size: Vector2) -> void:
-	var tone := Color(WHITE, lerpf(0.69, 0.30, smoothstep(70.0, 350.0, _distance)))
+	var tone := Color(WHITE, lerpf(0.70, 0.33, smoothstep(70.0, 350.0, _distance)))
+	var selected := Color(TEAL, 0.75)
 	var vertical_base := size.y * 0.64
 	var left := Vector2(_safe.position.x + 24 * _scale, vertical_base)
 	var right := Vector2(_safe.end.x - 24 * _scale, vertical_base)
-	var center_x := size.x * 0.5
-	var up := Vector2(center_x, size.y * (0.245 if _route_hint.is_empty() else 0.279))
-	var down := Vector2(center_x, minf(_safe.end.y - 31 * _scale, size.y * 0.90))
-	_draw_arrow(left, Vector2.LEFT, 14, tone)
-	_draw_arrow(right, Vector2.RIGHT, 14, tone)
-	_draw_arrow(up, Vector2.UP, 12, tone)
-	_draw_arrow(down, Vector2.DOWN, 12, tone)
-	var fire := Vector2(center_x, size.y * 0.56)
-	var inner := 6.0 * _scale
-	var outer := 13.0 * _scale
-	for axis in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
-		_surface.draw_line(fire + axis * inner, fire + axis * outer, tone, _scale, true)
-	_text(_position(fire, Vector2(0, 30)), "TIR", 12, tone, false, 0.5)
+	_draw_arrow(left, Vector2.LEFT, 20, selected if _selected_side < 0 else tone)
+	_draw_arrow(right, Vector2.RIGHT, 20, selected if _selected_side > 0 else tone)
 
 
 func _draw_arrow(at: Vector2, direction: Vector2, length: float, color: Color) -> void:
